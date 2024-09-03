@@ -81,7 +81,7 @@ class DenoisingMLP(nn.Module):
 
 def ema(mu, dx):
     '''exponential moving average'''
-    return mu, dx: mu*0.99 + dx*0.01 if mu else dx
+    return mu*0.99 + dx*0.01 if mu else dx
 
 batch_size = 64
 n_steps = 50_000
