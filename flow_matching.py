@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torchvision
 import tqdm
 from einops.layers.torch import Rearrange
-from diffusers import DDPMScheduler, DDIMScheduler
+
 
 def time_embedding(timestep, embedding_dim):
     half_dim = embedding_dim // 2
