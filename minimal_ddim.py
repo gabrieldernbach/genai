@@ -7,24 +7,25 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 
-def diffusion_schedule(diffusion_time):
-    # cosine fade from 95% to 2%
+def diffusion_schedule(time: torch.tensor):
+    '''maps time in [0, 1] to noise-rate and signal-rate factors'''
+    # cosine fade signal/noise mix from 95% to 2% signal
     start_angle = torch.tensor(0.95).arccos()
     end_angle = torch.tensor(0.02).arccos()
     diff = end_angle - start_angle
     
     # pythagorean identity ensures with preserve energy
     # sin(x) ** 2 + cos(x) ** 2 = 1 ** 2
-    diffusion_angle = start_angle + diffusion_time.mul(diff)
+    diffusion_angle = start_angle + time.mul(diff)
     signal_rate = diffusion_angle.cos()
     noise_rate = diffusion_angle.sin()
     return noise_rate, signal_rate
 
-def time_embedding(timestep, embedding_dim):
+def time_embedding(time: torch.tensor, embedding_dim: int):
     half_dim = embedding_dim // 2
-    emb = torch.log(torch.tensor(10000.0, device=timestep.device)) / (half_dim - 1)
-    emb = torch.exp(torch.arange(half_dim, dtype=torch.float32, device=timestep.device) * -emb)
-    emb = emb * timestep.float()
+    emb = torch.log(torch.tensor(10000.0, device=time.device)) / (half_dim - 1)
+    emb = torch.exp(torch.arange(half_dim, dtype=torch.float32, device=time.device) * -emb)
+    emb = emb * time.float()
     return torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
 
 def mlp(ins, hidden, outs):
@@ -34,7 +35,7 @@ def mlp(ins, hidden, outs):
         nn.Linear(hidden, outs),
     )
 
-class ResidualBlock(nn.Module):
+class ConditionedResidualMlp(nn.Module):
     '''see https://arxiv.org/pdf/2212.09748'''
     def __init__(self, noise_dimension, condition_dimension, latent_dimension, num_blocks):
         super().__init__()
@@ -58,11 +59,11 @@ class ResidualBlock(nn.Module):
         x = self.mlp(scale1 * x + shift) * scale2
         return x/self.num_blocks + residual
 
-class DenoisingMLP(nn.Module):
+class MlpStack(nn.Module):
     def __init__(self, noise_dimension, condition_dimension, num_blocks, latent_dimension):
         super().__init__()
         self.blocks = nn.ModuleList([
-            ResidualBlock(
+            ConditionedResidualMlp(
                 noise_dimension=noise_dimension, 
                 condition_dimension=condition_dimension,
                 latent_dimension=latent_dimension,
@@ -107,7 +108,7 @@ dl = torch.utils.data.DataLoader(
         num_samples=batch_size*n_steps
     )
 )
-model = DenoisingMLP(
+model = MlpStack(
     noise_dimension=28*28,
     condition_dimension=512,
     latent_dimension=1024,
@@ -124,9 +125,6 @@ scheduler = torch.optim.lr_scheduler.LambdaLR(
             torch.linspace(1, 0, n_cooldown),
         ])[x]
 )
-
-
-
 
 ### TRAINING ###
 loss_avg = None
