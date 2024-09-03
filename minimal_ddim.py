@@ -22,6 +22,7 @@ def diffusion_schedule(time: torch.tensor):
     return noise_rate, signal_rate
 
 def time_embedding(time: torch.tensor, embedding_dim: int):
+    '''positional encoding of time [0, 1]'''
     half_dim = embedding_dim // 2
     emb = torch.log(torch.tensor(10000.0, device=time.device)) / (half_dim - 1)
     emb = torch.exp(torch.arange(half_dim, dtype=torch.float32, device=time.device) * -emb)
@@ -36,7 +37,7 @@ def mlp(ins, hidden, outs):
     )
 
 class ConditionedResidualMlp(nn.Module):
-    '''see https://arxiv.org/pdf/2212.09748'''
+    '''see https://arxiv.org/pdf/2212.09748 for adaptive layer norm feature-wise modulation'''
     def __init__(self, noise_dimension, condition_dimension, latent_dimension, num_blocks):
         super().__init__()
         self.conditioning_layer = mlp(
@@ -72,9 +73,8 @@ class MlpStack(nn.Module):
             for _ in range(num_blocks)
         ])
         
-    def forward(self, x, timestep, z):
-        t_embedding = time_embedding(timestep, z.size(1))
-        cond = z + t_embedding 
+    def forward(self, x, time, z):
+        cond = z + time_embedding(time, z.size(1))
         for block in self.blocks:
             x = block(x, cond)
         return x
@@ -133,10 +133,10 @@ for idx, (img, tar) in enumerate(dl):
     noise = torch.randn(img.shape, device=device)
     z = cls_tokens[tar]
     
-    diffusion_time = torch.rand(size=(len(img),1), device=device)
-    noise_rate, signal_rate = diffusion_schedule(diffusion_time)
+    time = torch.rand(size=(len(img),1), device=device)
+    noise_rate, signal_rate = diffusion_schedule(time)
     noised = signal_rate * img + noise_rate * noise
-    pred = model(noised, noise_rate, z)
+    pred = model(noised, time, z)
     loss = F.mse_loss(pred, noise)
 
     loss.backward()
@@ -157,22 +157,21 @@ initial_noise = torch.randn((num_images, 28*28)).to(device)  # Start with Gaussi
 diffusion_steps = 100
 step_size = 1.0 / diffusion_steps
 
-idxs = torch.randint(0, 10, size=(16, ))
-cond = cls_tokens[idxs]
+class_idxs = torch.randint(0, 10, size=(16, ))
+z = cls_tokens[class_idxs]
 noisy_images = initial_noise
-
 with torch.no_grad():
-    for step in tqdm(torch.linspace(1, 0, diffusion_steps, device=device)):
-        diffusion_times = step.expand(num_images, 1)
-        noise_rate, signal_rate = diffusion_schedule(diffusion_times)
-        next_noise_rates, next_signal_rates = diffusion_schedule(diffusion_times - step_size)
+    for time in tqdm(torch.linspace(1, 0, diffusion_steps, device=device)):
+        time = time.expand(num_images, 1)
+        noise_rate, signal_rate = diffusion_schedule(time)
+        next_noise_rates, next_signal_rates = diffusion_schedule(time - step_size)
         
-        pred_noise = model(noisy_images, noise_rate, cond)
+        pred_noise = model(noisy_images, time, z)
         pred_image = (noisy_images - noise_rate * pred_noise) / signal_rate
         noisy_images = (next_signal_rates * pred_image + next_noise_rates * pred_noise).clip(-1, 1)
 
 fig, axs = plt.subplots(4, 4, figsize=(6, 6))
-for ax, xt, idx in zip(axs.flatten(), noisy_images, idxs):
+for ax, xt, idx in zip(axs.flatten(), noisy_images, class_idxs):
     ax.imshow(xt.reshape(28, 28).detach().cpu())
     ax.axis("off"); ax.set_title(idx.item())
 fig.tight_layout()
