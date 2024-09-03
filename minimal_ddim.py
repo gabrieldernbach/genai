@@ -133,13 +133,12 @@ loss_avg = None
 for idx, (img, tar) in enumerate(dl):
     img = img.to(device)
     noise = torch.randn(img.shape, device=device)
-    cond = cls_tokens[tar]
-
+    z = cls_tokens[tar]
     
     diffusion_time = torch.rand(size=(len(img),1), device=device)
     noise_rate, signal_rate = diffusion_schedule(diffusion_time)
     noised = signal_rate * img + noise_rate * noise
-    pred = model(noised, noise_rate, cond)
+    pred = model(noised, noise_rate, z)
     loss = F.mse_loss(pred, noise)
 
     loss.backward()
