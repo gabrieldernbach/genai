@@ -7,11 +7,11 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 
-def time_embedding(timestep, embedding_dim):
+def time_embedding(time: torch.tensor, embedding_dim: int):
     half_dim = embedding_dim // 2
-    emb = torch.log(torch.tensor(10000.0, device=timestep.device)) / (half_dim - 1)
-    emb = torch.exp(torch.arange(half_dim, dtype=torch.float32, device=timestep.device) * -emb)
-    emb = emb * timestep.float()
+    emb = torch.log(torch.tensor(10000.0, device=time.device)) / (half_dim - 1)
+    emb = torch.exp(torch.arange(half_dim, dtype=torch.float32, device=time.device) * -emb)
+    emb = emb * time.float()
     return torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
 
 def mlp(ins, hidden, outs):
@@ -58,9 +58,8 @@ class DenoisingMLP(nn.Module):
             for _ in range(num_blocks)
         ])
         
-    def forward(self, x, timestep, z):
-        t_embedding = time_embedding(timestep, z.size(1))
-        cond = z + t_embedding 
+    def forward(self, x, timestep, class_token):
+        cond = class_token + time_embedding(timestep, z.size(1))
         for block in self.blocks:
             x = block(x, cond)
         return x
@@ -106,7 +105,7 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-6)
 scheduler = torch.optim.lr_scheduler.LambdaLR(
     optimizer=optimizer,
     lr_lambda=lambda x: torch.cat([
-            torch.linspace(0, 1, n_warmup),
+            torch.linspace(0, 1, n_warmup), # Adams second order need  
             torch.logspace(0, -1, n_steps-n_warmup-n_cooldown+1),
             torch.linspace(1, 0, n_cooldown),
         ])[x]
