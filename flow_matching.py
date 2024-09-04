@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
-import tqdm
 from einops.layers.torch import Rearrange
+from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 
 def time_embedding(timestep, embedding_dim):
@@ -71,8 +72,8 @@ def ema(mu, dx):
 
 batch_size = 512
 n_steps = 8_000
-n_warmup = 500
-n_cooldown = 500
+n_warmup = 100
+n_cooldown = 0 # not recommended 
 device = 'mps'
 
 ds = torchvision.datasets.MNIST(
@@ -111,10 +112,7 @@ scheduler = torch.optim.lr_scheduler.LambdaLR(
         ])[x]
 )
 
-
-
-ema = lambda mu, dx: mu*0.99 + dx*0.01 if mu else dx
-
+### TRAIN ###
 loss_avg = None
 for idx, (img, tar) in enumerate(dl):
     img = img.to(device)
@@ -138,10 +136,8 @@ for idx, (img, tar) in enumerate(dl):
 
 
 
-from tqdm import tqdm
-import matplotlib.pyplot as plt
 
-
+### SAMPLE ###
 num_images = 16
 initial_noise = torch.randn((num_images, 28*28)).to(device)  # Start with Gaussian noise
 diffusion_steps = 100
