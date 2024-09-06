@@ -55,19 +55,21 @@ class MaskGit(nn.Module):
         )
 
     def token_mask(self, token):
+        '''mask between 0 to 100% of observed tokens in row=example'''
         device = token.device
         per_row_threshold = torch.rand(len(token), 1, device=device)
         mask = torch.rand(token.shape, device=device).ge(per_row_threshold)
-        
+
+        # the last token (mask_idx) in our vocabulary is the mask
         source = torch.where(
-            # where mask is true, take mask_idx (token), else take token
+            # where mask is true, take mask_idx, else take original token
             condition=mask, 
             input=torch.ones_like(token, device=device).mul(self.mask_idx),
             other=token,
         )
-
+        # a value of -1 in the target indicates loss computation should be skipped
         destination = torch.where(
-            # where mask is true, take token, else take -1 to skip loss computation
+            # where mask is true, take original token, else take -1 to skip loss computation
             condition=mask,
             input=token,
             other=torch.ones_like(token).mul(-1),
@@ -76,7 +78,7 @@ class MaskGit(nn.Module):
 
     def forward(self, token, cls_ids):
         source, destination = self.token_mask(token)
-        inputs = torch.cat([
+        inputs = torch.cat([ 
             self.cls_emb(cls_ids.unsqueeze(-1)),
             self.tok_emb(source).add(self.pos_emb)
         ], dim=1)
@@ -125,10 +127,14 @@ with torch.no_grad():
     n_token = 49
     
     cls_ids = torch.randint(0, 10, (num_samples, 1))
+    # initially the state of sampling is all masked
     state = torch.ones(num_samples, n_token, dtype=torch.long).mul(model.mask_idx)
-    
-    shuff = torch.randn(num_samples, n_token).argsort(-1)
+
+    # create chunks of token positions to uncover, as in [111000000] [000111000] [000000111]
     blocks = torch.eye(7).kron(torch.ones(num_samples, 7)).chunk(7, dim=0)
+    # generate random ordering globally
+    shuff = torch.randn(num_samples, n_token).argsort(-1)
+    # apply global random ordering to all chunks
     policy = torch.gather(
         torch.stack(blocks),
         dim=-1,
@@ -141,15 +147,16 @@ with torch.no_grad():
             model.cls_emb(cls_ids.to('mps')),
             model.tok_emb(state.to('mps')) + model.pos_emb,
         ], axis=1)
-        logits = model.predictor(model.backbone(inputs.to('mps')))[:, 1:] # remove cls label
+        logits = model.predictor(model.backbone(inputs.to('mps')))[:, 1:] # remove cls token
 
         logits = logits / 1 # temperature
         cutoff = torch.topk(logits, 16, dim=-1).values[..., -1]
-        logits[logits < cutoff[..., None]] = -float('Inf')
+        logits[logits < cutoff[..., None]] = -float('Inf') # only allow top-k logits as in gpt
         
         smp_onehot = torch.distributions.Multinomial(logits=logits).sample()
         proposal = smp_onehot.argmax(-1)
         state = torch.where(
+            # where policy allows a proposal, take proposal, else keep current state
             condition=pol,
             input=proposal.cpu(), 
             other=state,
