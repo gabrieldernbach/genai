@@ -84,6 +84,7 @@ class ConditionalFlow(nn.Module):
         return x
 
     def loss(self, x, cls_idx):
+        '''see https://arxiv.org/pdf/2210.02747 equation (23)'''
         noise = torch.randn(x.shape, device=device)    
         time = torch.randn(size=(len(x),1), device=device).sigmoid()
         noised = (1-time) * x + (0.001 + 0.999*time) * noise
