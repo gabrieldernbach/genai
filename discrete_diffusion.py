@@ -7,7 +7,7 @@ Often, the introduction of a rigorous framework can limit its adoption, and moti
 
 The following is inteded as a minimal proof of concept that shows how to translate flow-matching from 
 continous time and space to discrete time and space. As in the other notebooks, we train a model
-to predict the flow – the direction to follow at each point in time, to translate from base-space to sample space.
+to predict the probability flow – a likelyhood of direction to take at each point in time, to translate an observation from base-space to sample-space.
 
 This approach has not been investigated formally and failure cases will need to be outlined.
 Empirically we find that
