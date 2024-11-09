@@ -1,6 +1,6 @@
 """
 Proof of concept of a simple diffusion process that is discrete in space and time.
-For applications think of amino-acid-sequences, or even simpler natural language.
+For applications think of amino-acid-sequences, or even simpler – natural language.
 
 Discrete optimization is notoriously difficult, as naively theses spaces don't have a natural gradient to follow.
 Often, the introduction of the more general framework will limit its adoption.
