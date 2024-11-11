@@ -3,11 +3,10 @@ Proof of concept of a simple diffusion process that is discrete in space and tim
 For applications think of amino-acid-sequences, or even simpler – natural language.
 
 Discrete optimization is notoriously difficult, as naively theses spaces don't have a natural gradient to follow.
-Often, the introduction of a rigorous framework can limit its adoption, and motivated this approach.
 
-The following is inteded as a minimal proof of concept that shows how to translate flow-matching from 
-continous time and space to discrete time and space. As in the other notebooks, we train a model
-to predict the probability flow – a likelyhood of direction to take at each point in time, to translate an observation from base-space to sample-space.
+The following is inteded as a minimal proof of concept that shows how to translate continous time and space flow-matching 
+to discrete time and space with minimal changes. As in the other notebooks, we train a model
+to predict the probability flow – a likelihood of direction to take at each point in time, to translate an observation from base-space to sample-space.
 
 This approach has not been investigated formally and failure cases will need to be outlined.
 Empirically we find that
