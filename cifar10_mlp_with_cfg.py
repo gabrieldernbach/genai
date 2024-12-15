@@ -76,7 +76,7 @@ class DiffusionMLpMixer(nn.Module):
         self.cls_emb = nn.Embedding(num_embeddings=200, embedding_dim=512)
 
     def forward(self, x, time, cls_idx):
-        cls_emb = self.cls_emb(cls_idx)
+        cls_emb = self.cls_emb(cls_idx.add(1)) ## allows for -1 as special cls_idx
         t_embedding = sinusoidal_embedding(time.squeeze(1), cls_emb.size(-1))
         x = self.stem(x)
 
@@ -89,22 +89,26 @@ class DiffusionMLpMixer(nn.Module):
 
     def loss(self, x, cls_idx):
         '''see https://arxiv.org/pdf/2210.02747 equation (23)'''
+        cls_idx = torch.where( # remove class condition to allow CFG
+            torch.rand(len(cls_idx), device=device).ge(0.8), # on 20% of idxs
+            torch.zeros(len(cls_idx), device=device).sub(1).long(), # place -1
+            cls_idx # otherwise keep original
+        )
         noise = torch.rand(x.shape, device=device).mul(2).sub(1)
         time = torch.randn(size=(len(x),1), device=device).sigmoid()
-        noised = (torch.einsum('bi,bijk->bijk', 1-time, x)
-                  + torch.einsum('bi,bijk->bijk', 0.001 + 0.999*time, noise))
+        noised = (1-time)[..., None, None] * x + (0.001 + 0.999*time)[..., None, None] * noise
         pred = self.forward(noised, time, cls_idx)
         return F.mse_loss(pred, noise.mul(0.999).sub(x))
 
     def sample(self, cls_idx, guidance=1, n_steps=100):
         x = torch.rand(len(cls_idx), 3, 32, 32, device=cls_idx.device).mul(2).sub(1)
-        cls_idx0 = torch.zeros(len(cls_idx), device=cls_idx.device).long()
+        cls_unconditional = torch.zeros(len(cls_idx), device=cls_idx.device).sub(1).long()
         dt = 1.0 / n_steps
         with torch.no_grad():
             for t in tqdm(torch.linspace(1, 0, n_steps, device=x.device)):
                 t = t.expand(len(x), 1)
-                k1 = self.forward(x, t, cls_idx+1)
-                k2 = self.forward(x, t, cls_idx0)
+                k1 = self.forward(x, t, cls_idx)
+                k2 = self.forward(x, t, cls_unconditional)
                 x = x - dt * (k1*guidance + (1-guidance)*k2)
                 x = x.clip(-1, 1)
         return x
@@ -174,11 +178,6 @@ for epoch in range(1, 4000):
     for idx, (img, tar) in enumerate(dl):
         start = time()
         img, tar = img.to(device), tar.to(device)
-        tar = torch.where( # remove class condition to allow CFG
-            torch.rand(len(tar), device=device).ge(0.8),
-            torch.zeros(len(tar), device=device).long(),
-            tar.add(1)
-        )
         with autocast(device_type=device, dtype=torch.bfloat16):
             loss = model.loss(img, tar)
         scaler.scale(loss).backward()
