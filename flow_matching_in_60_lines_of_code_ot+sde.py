@@ -81,7 +81,7 @@ def stochastic_divergence(f, t, x, num_samples=10):
 
 
 class Flow(nn.Module):
-    def __init__(self, n_dim=2, n_pos_dim=2, n_hidden=256):
+    def __init__(self, n_dim=2, n_pos_dim=2, n_hidden=128):
         super().__init__()
         self.n_dim = n_dim
         self.n_pos_dim = n_pos_dim
@@ -92,7 +92,7 @@ class Flow(nn.Module):
             nn.GELU(),
             nn.Linear(n_hidden, n_hidden),
             nn.GELU(),
-            nn.Linear(n_hidden, n_dim),
+            nn.Linear(n_hidden, n_dim, bias=False),
         )
         self.temb = nn.Linear(1, n_pos_dim // 2)
 
@@ -184,7 +184,7 @@ class Flow(nn.Module):
         dalpha_t = -1
         sigma_t = lambda t: 0.001 + 0.999 * t
         dsigma_t = 0.999
-        diff_t = lambda t: torch.minimum(torch.ones_like(t), 3 * t)
+        diff_t = lambda t: 1.0
         f_t = lambda t: 1 / alpha_t(t) * dalpha_t
         g_t = (
             lambda t: 2
@@ -214,10 +214,10 @@ class Flow(nn.Module):
                     * (alpha_t(t) * v - dalpha_t * x)
                     / (dalpha_t * sigma_t(t) - alpha_t(t) * dsigma_t + 1e-6)
                 )
-                score = (
-                    -1 / sigma_t(t) * (x + (1 - t) * v)
-                )  # - 1/sigma E[\epsilon | x_t]
-                drift = self.forward(t, x) - 1 / 2 * diff_t(t) ** 2 * score
+                # score = (
+                # -1 / sigma_t(t) * (x + (1 - t) * v)
+                # )  # - 1/sigma E[\epsilon | x_t]
+                drift = self.forward(t, x) - diff_t(t) ** 2 * score
                 diffusion = diff_t(t) * dt**0.5 * torch.randn_like(x)
                 x = x - (drift * dt + diffusion)
                 if likelihood:
@@ -262,26 +262,25 @@ class Flow(nn.Module):
 
         alpha_t = lambda t: 1 - t
         dalpha_t = lambda t: -1
-        dlog_alpha_t = lambda t: -1 / (1 - t + 1e-5)
+        dlog_alpha_t = lambda t: -1 / (1 - t + 1e-6)
         sigma_t = lambda t: 0.001 + 0.999 * t
-        dsigma_t = lambda t: 0.999
-        diff_t = lambda t: torch.minimum(torch.ones_like(t), 3 * t)
-        f_t = lambda t: dlog_alpha_t(t)
+        dsigma_t = lambda t: 0.9999
+        diff_t = lambda t: 1.0
+        f_t = lambda t: dlog_alpha_t(t)  # f(t) already incorporates - sign
         g_t = lambda t: (
             2
             * (
                 sigma_t(t) * dsigma_t(t)
-                - sigma_t(t) ** 2 * dalpha_t(t) / (alpha_t(t) + 1e-5)
+                - sigma_t(t) ** 2 * dalpha_t(t) / (alpha_t(t) + 1e-6)
             )
             + 1e-6
         ).pow(0.5)
-        eta_t = lambda t: 1.0
 
         if traj:
             traj = [x]
         if likelihood:
             dim = x.shape[-1]
-            likelihood = [
+            loglikelihood = [
                 torch.distributions.MultivariateNormal(
                     torch.zeros((1, dim)), torch.diag(torch.ones(dim))
                 ).log_prob(x)
@@ -289,7 +288,7 @@ class Flow(nn.Module):
 
         """Notation from https://arxiv.org/pdf/2411.01293"""
         with torch.no_grad():
-            for step, t in tqdm(enumerate(torch.linspace(1, 0.001, n_steps))):
+            for step, t in tqdm(enumerate(torch.linspace(0.99, 0.001, n_steps))):
                 t = t.expand(len(x), 1)
                 v = self.forward(t, x)
                 score = (
@@ -301,35 +300,40 @@ class Flow(nn.Module):
                 # score = (
                 #     -1 / sigma_t(t) * (x + (1 - t) * v)
                 # )  # - 1/sigma E[\epsilon | x_t]
-                drift = f_t(t) * x - g_t(t) ** 2 * score
+                drift = f_t(t) * x - 1 / 2 * g_t(t) ** 2 * (1 + diff_t(t) ** 2) * score
                 brownian_motion = torch.randn_like(x)
-                diffusion = g_t(t) * brownian_motion
+                diffusion = diff_t(t) * g_t(t) * brownian_motion
                 x = x + drift * (-dt) + diffusion * dt**0.5
                 if likelihood:
                     f_, g_ = f_t(t).squeeze(), g_t(t).squeeze()
                     # div = divergence(lambda t, x: -f_t(t) * x, t=t, x=x)
-                    likelihood_det_update = f_ + 1 / 2 * g_**2 * score.pow(2).squeeze()
-                    likelihood_stoch_update = g_ * (score * brownian_motion).squeeze()
-                    likelihood += [
-                        likelihood[-1]
-                        + likelihood_det_update * (-dt)
-                        + likelihood_stoch_update * dt**0.5
-                    ]
+                    # Skreta et als notation
+                    score = score.clamp(-10, 10)
+                    dx = drift * (-dt) + diffusion * dt**0.5
+                    one = score * dx
+                    two = -f_t(t)
+                    three = (-f_t(t) - 1 / 2 * g_t(t) ** 2 * score) * score
+                    update = one + (two + three) * (-dt)
+                    # Cartoonist notation
+                    det_update = -f_t(t) - 1 / 2 * g_t(t) ** 2 * score**2
+                    stoch_update = g_t(t) * score * brownian_motion
+                    update = det_update * (-dt) + stoch_update * dt**0.5
+                    loglikelihood += [loglikelihood[-1] + update.squeeze()]
                     # dx = drift * (-dt) + diffusion * dt**0.5
                     # det_ll_update = -f_t(t) + -f_t(t) * x - 1 / 2 * g_t(t) ** 2 * score
                     # stoch_ll_update = dx * score
                     # likelihood += [
                     #     likelihood[-1] + (+det_ll_update.squeeze() * (-dt) + stoch_ll_update.squeeze())
                     # ]
-                if traj and step % (n_steps // 10) == 0 or step == n_steps - 1:
-                    traj.append(x)  # x - t * dx for x1 prediction
+                # if traj and step % (n_steps // 10) == 0 or step == n_steps - 1:
+                traj.append(x)  # x - t * dx for x1 prediction
 
         if likelihood:
-            likelihood = torch.stack(likelihood).detach().unsqueeze(-1)
+            loglikelihood = torch.stack(loglikelihood).detach().unsqueeze(-1)
         return {
             "samples": x.detach(),
             "traj": torch.stack(traj).detach(),
-            "likelihood": likelihood,
+            "likelihood": loglikelihood,
         }
 
 
@@ -393,7 +397,7 @@ def plot_samples(data, samples, suptitle=""):
         axs[dim, 1].hist(samples[:, dim], density=True, bins=100)
         axs[dim, 0].set_xlim(-2, 2)
         axs[dim, 0].set_ylim(0, 1)
-        axs[dim, 1].set_xlim(-2, 2)
+        # axs[dim, 1].set_xlim(-2, 2)
         axs[dim, 1].set_ylim(0, 1)
 
     axs[0, 0].set_title("Ground Truth Dist")
@@ -471,8 +475,8 @@ samples, trajs, likelihood = (
 
 # %%
 # Training
-optimizer = torch.optim.Adam(flow.parameters(), lr=1e-3)
-pbar = tqdm(range(2000))
+optimizer = torch.optim.Adam(flow.parameters(), lr=1e-4)
+pbar = tqdm(range(5000))
 for epoch in pbar:
     optimizer.zero_grad()
     subset = torch.randint(0, len(data), (256,))
@@ -514,10 +518,10 @@ plt.show()
 samples_sde_dict = flow.sample_diffusion(n_samples=2_000, n_steps=1000, likelihood=True)
 plot_samples(data, samples=samples_sde_dict["samples"], suptitle="Samples from SDE")
 
-# base_noise = einops.repeat(torch.linspace(-2, 2, 200), "n -> n d", d=data.shape[-1])
+# base_noise = einops.repeat(torch.linspace(-0.2, 0.2, 200), "n -> n d", d=data.shape[-1])
 base_noise = einops.repeat(torch.ones(200) * 0.0, "n -> n d", d=data.shape[-1])
 samples_sde_dict = flow.sample_diffusion(
-    n_samples=1_000, n_steps=50_000, likelihood=True, base_noise=base_noise
+    n_samples=1_000, n_steps=10_000, likelihood=True, base_noise=base_noise
 )
 plot_samples(
     data,
@@ -544,7 +548,7 @@ plot_likelihood(
 # print(likelihood_sde[-1])
 # print(gmm.prob(torch.linspace(-2, 2, 100).unsqueeze(-1)).log())
 
-fig, axs = plt.subplots(1, 12, figsize=(20, 2))
-axs = axs.flatten()
-for step, step_data in enumerate(trajs_sde):
-    axs[step].hist(step_data.squeeze(), density=True, bins=50)
+# fig, axs = plt.subplots(1, 12, figsize=(20, 2))
+# axs = axs.flatten()
+# for step, step_data in enumerate(trajs_sde):
+#     axs[step].hist(step_data.squeeze(), density=True, bins=50)
